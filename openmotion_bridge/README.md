@@ -15,7 +15,8 @@ proprietary; keep this the only omotion-linking process.
 ```bash
 pip install -e ".[dev,bridge]"
 OPENMOTION_BRIDGE_DB=/tank/openmotion/scans.db python -m openmotion_bridge
-# binds 127.0.0.1:5192 by default (OPENMOTION_BRIDGE_HOST / _PORT to override)
+# binds 127.0.0.1:5193 by default (OPENMOTION_BRIDGE_HOST / _PORT to override).
+# NB: 5192 is already used on Niflheim by the Sana/SD image-gen service.
 ```
 
 ## API
