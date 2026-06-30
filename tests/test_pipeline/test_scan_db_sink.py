@@ -71,6 +71,10 @@ def test_scan_db_sink_stamps_session_meta(tmp_path):
     db_path = str(tmp_path / "scan.db")
     sink = ScanDBSink(db_path=db_path)
     sink.on_scan_start(_meta_reduced())
+    # Feed one corrected side-average row so the session isn't dropped as empty
+    # (ScanDBSink deletes sessions with zero corrected rows); reduced mode
+    # persists only cam_id=-1 frames.
+    sink.consume("final", _interval([_frame(10, side="left", cam_id=-1)]))
     sink.on_complete()
 
     conn = sqlite3.connect(db_path)

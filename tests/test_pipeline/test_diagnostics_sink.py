@@ -18,6 +18,10 @@ from omotion.pipeline.batch import (
     TriggerStateEvent,
 )
 from omotion.pipeline.sinks import DiagnosticsLogSink, ScanDBSink, ScanMetadata
+from omotion.pipeline.stages.dark import (
+    EnrichedCorrectedFrame,
+    EnrichedCorrectedInterval,
+)
 
 
 def _meta():
@@ -33,6 +37,18 @@ def _dark_warning(abs_id=42):
         side="left", cam_id=0, abs_frame_id=abs_id,
         u1=90.0, pedestal=64.0, threshold=5.0,
     )
+
+
+def _corrected_interval():
+    """One per-camera corrected frame so the session has >=1 row and is not
+    deleted as empty (ScanDBSink drops sessions with zero corrected rows).
+    Normal-mode meta → cam_id 0 is persisted."""
+    return EnrichedCorrectedInterval(left_abs=10, right_abs=610, frames=[
+        EnrichedCorrectedFrame(
+            abs_frame_id=10, t=0.25, side="left", cam_id=0,
+            mean=100.0, std=2.0, contrast=0.02, bfi=4.0, bvi=6.0, quality="ok",
+        ),
+    ])
 
 
 def test_log_sink_warns_on_integrity_events(caplog):
@@ -73,6 +89,9 @@ def test_scan_db_sink_writes_diagnostics_summary_to_session_meta(tmp_path):
         threshold=69.0, found=False))
     # Routine events must not pollute the summary.
     sink.consume("diagnostics", TriggerStateEvent(state="OFF", timestamp_s=60.0))
+    # A corrected row so the session survives on_complete (empty sessions are
+    # deleted); the diagnostics summary is only written for a non-empty session.
+    sink.consume("final", _corrected_interval())
     sink.on_complete()
 
     conn = sqlite3.connect(db_path)
@@ -92,6 +111,9 @@ def test_scan_db_sink_meta_has_no_diagnostics_key_when_clean(tmp_path):
     db_path = str(tmp_path / "scan.db")
     sink = ScanDBSink(db_path=db_path)
     sink.on_scan_start(_meta())
+    # A corrected row (no diagnostics events) so the session survives; we are
+    # asserting the absence of a diagnostics key, not an empty session.
+    sink.consume("final", _corrected_interval())
     sink.on_complete()
 
     conn = sqlite3.connect(db_path)
