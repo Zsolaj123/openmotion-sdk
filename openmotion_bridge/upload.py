@@ -56,6 +56,10 @@ def upload(db_path: str, base_url: str, *, session_id: Optional[int] = None,
         if session_id is None:
             raise SystemExit(f"no sessions in {db_path}")
     session, rows = rows_from_session(db_path, session_id)
+    if session is None:
+        raise SystemExit(f"session {session_id} not found in {db_path}")
+    if not rows:
+        raise SystemExit(f"session {session_id} in {db_path} has no corrected rows to upload")
     meta = session.get("session_meta") if session else None
     label = (session or {}).get("session_label", "") or ""
     if isinstance(meta, dict):

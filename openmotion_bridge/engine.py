@@ -159,10 +159,11 @@ class ReplayEngine:
         try:
             session = db.get_session(session_id)
             rows = []
-            for row in db.iter_session_data(session_id, side=side, cam_id=cam_id):
-                rows.append(row)
-                if limit is not None and len(rows) >= limit:
-                    break
+            if limit is None or limit > 0:   # limit<=0 → metadata only, no rows
+                for row in db.iter_session_data(session_id, side=side, cam_id=cam_id):
+                    rows.append(row)
+                    if limit is not None and len(rows) >= limit:
+                        break
             return {"session": session, "data": rows}
         finally:
             db.close()
@@ -179,6 +180,10 @@ class ReplayEngine:
         the bfi/bvi/contrast/mean/quality metrics are optional. Creates one
         session (label ``{scan_id}_{subject_id}``) and returns its id + count.
         """
+        if not rows:
+            # nothing to persist — don't create an orphan empty session
+            return {"session_id": None, "session_label": f"{scan_id}_{subject_id}",
+                    "ingested_rows": 0, "note": "no rows to ingest"}
         db = ScanDatabase(db_path=self.db_path)
         try:
             label = f"{scan_id}_{subject_id}"
@@ -201,7 +206,11 @@ class ReplayEngine:
                 "contrast": r.get("contrast"), "mean": r.get("mean"),
                 "quality": str(r.get("quality", "ok") or "ok"),
             } for r in rows]
-            n = db.insert_session_data_rows(payload) if payload else 0
+            try:
+                n = db.insert_session_data_rows(payload) if payload else 0
+            except Exception:
+                db.delete_session(session_id)   # no orphan empty session on a rejected batch
+                raise
             db.close_session(session_id, start)
             return {"session_id": session_id, "session_label": label,
                     "ingested_rows": n}

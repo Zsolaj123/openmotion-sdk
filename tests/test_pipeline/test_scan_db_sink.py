@@ -277,3 +277,17 @@ def test_session_data_has_quality_column(tmp_path):
     columns = {row[1] for row in cursor.fetchall()}
     assert "quality" in columns
     db.close()
+
+
+def test_scan_db_sink_deletes_empty_session(tmp_path):
+    """A session that received no corrected 'final' rows is deleted from the
+    sessions table on_complete (positive guard for the empty-session-deletion
+    behavior — the 3 fixed tests only exercised it as a side effect)."""
+    db_path = str(tmp_path / "scan.db")
+    sink = ScanDBSink(db_path=db_path)
+    sink.on_scan_start(_meta_simple())
+    sink.on_complete()   # no 'final' rows fed → empty session
+    conn = sqlite3.connect(db_path)
+    n_sessions = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+    conn.close()
+    assert n_sessions == 0, "empty session header should have been deleted"

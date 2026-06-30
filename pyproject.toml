@@ -75,6 +75,12 @@ include-package-data = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Put the repo root on sys.path so cross-package test imports (e.g.
+# test_determinism.py's `from tests.test_pipeline.test_golden_replay import …`)
+# resolve under a bare `pytest` invocation, not only `python -m pytest`. Without
+# this, the editable install's finder maps only omotion/openmotion_bridge and
+# bare `pytest tests/` aborts at collection with ModuleNotFoundError: 'tests'.
+pythonpath = ["."]
 addopts = "-v --tb=short -m 'not fpga and not imu'"
 timeout = 30
 timeout_method = "thread"

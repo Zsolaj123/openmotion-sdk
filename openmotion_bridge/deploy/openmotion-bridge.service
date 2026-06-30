@@ -1,15 +1,19 @@
 # openmotion-bridge — Niflheim receiver/replay/serve service.
 #
 # Install (run on Niflheim):
+#   # 1. make sure the venv has the bridge extra (else ExecStart ImportError-crash-loops):
+#   /tank/repos/.research-clones/openmotion-sdk/.venv/bin/pip install -e '/tank/repos/.research-clones/openmotion-sdk[bridge]'
 #   sudo cp openmotion_bridge/deploy/openmotion-bridge.service /etc/systemd/system/
 #   sudo mkdir -p /tank/openmotion/scans && sudo chown zsine:zsine /tank/openmotion/scans
 #   sudo systemctl daemon-reload && sudo systemctl enable --now openmotion-bridge
-#   systemctl status openmotion-bridge   # then: curl 127.0.0.1:5193/health
+#   systemctl status openmotion-bridge && curl 127.0.0.1:5197/health   # verify
 #
-# ADJUST the two paths below if the openmotion-sdk fork lives somewhere other
-# than the current analysis clone. Binds 127.0.0.1 — reach it from a workstation
-# via SSH LocalForward 5193 (preferred) or, only if you set HOST=0.0.0.0,
-# Tailscale http://niflheim:5193 (no auth — see the bridge README).
+# ADJUST WorkingDirectory + ExecStart below if the openmotion-sdk fork lives
+# somewhere other than this analysis clone, and confirm that venv has [bridge].
+# Binds 127.0.0.1 — reach it from a workstation via SSH LocalForward 5197
+# (preferred) or, only if you set HOST=0.0.0.0, Tailscale http://niflheim:5197
+# (no auth — see the bridge README). Port 5197 avoids 5192 (image-gen) + 5193
+# (Quarkdown coordinator).
 
 [Unit]
 Description=openmotion-bridge (Open-Motion replay / ingest / serve)
@@ -22,7 +26,7 @@ User=zsine
 WorkingDirectory=/tank/repos/.research-clones/openmotion-sdk
 Environment=OPENMOTION_BRIDGE_DB=/tank/openmotion/scans/scans.db
 Environment=OPENMOTION_BRIDGE_HOST=127.0.0.1
-Environment=OPENMOTION_BRIDGE_PORT=5193
+Environment=OPENMOTION_BRIDGE_PORT=5197
 ExecStart=/tank/repos/.research-clones/openmotion-sdk/.venv/bin/python -m openmotion_bridge
 Restart=on-failure
 RestartSec=3

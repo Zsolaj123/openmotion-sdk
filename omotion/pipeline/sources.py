@@ -412,7 +412,12 @@ class SyntheticSource(_BaseSource):
     schedule mirrors ``tests/fixtures/generate_fixtures.py`` so a synthetic scan
     is structurally identical to a recorded one. Drive it with
     ``default_pipeline`` using the SAME ``discard_count`` / ``dark_interval``
-    you pass here (classification is positional).
+    you pass here (classification is positional). NOTE ``default_pipeline``'s
+    own ``dark_interval`` default is 600 while this source's is 20 — pass
+    ``dark_interval`` explicitly to BOTH so they match (``ReplayEngine`` does
+    this for you). A ``cam_ids`` override applies to every mask-active side; if
+    you use it, set the matching camera mask too (reduced-mode side-averaging
+    derives its cameras from the mask).
 
     Active sides/cameras are taken from ``metadata``'s camera masks unless
     ``cam_ids`` is given. Deterministic for a fixed ``seed``.
@@ -444,6 +449,17 @@ class SyntheticSource(_BaseSource):
             self._sides.append(("left", 0, metadata.left_camera_mask))
         if metadata.right_camera_mask:
             self._sides.append(("right", 1, metadata.right_camera_mask))
+        # Fail loud instead of silently streaming nothing — recreating the
+        # demo_mode empty-scan failure this source exists to prevent.
+        if not self._sides:
+            raise ValueError(
+                "SyntheticSource: no active side — set left_camera_mask and/or "
+                "right_camera_mask on the metadata.")
+        if self._n_frames < self._discard_count + 3:
+            raise ValueError(
+                f"SyntheticSource: n_frames={self._n_frames} too small for "
+                f"discard_count={self._discard_count} — need >= discard_count+3 "
+                "so a dark interval can close and BFI/BVI actually streams.")
 
     def _cams_for(self, mask: int) -> list[int]:
         if self._cam_override is not None:
@@ -510,9 +526,12 @@ class SyntheticSource(_BaseSource):
         timestamp_s = self._apply_timestamp_normalization(timestamp_s)
         side_ids    = np.full(n, side_idx, dtype=np.int8)
         raw_hist    = np.zeros((n, 2, 8, 1024), dtype=np.uint32)
-        temp_arr    = np.full((n, 2, 8), 36.5, dtype=np.float32)
+        # Zero inactive (side, cam) slots and fill only the active one — matches
+        # CsvReplaySource / LiveUsbSource (which leave inactive slots at 0).
+        temp_arr    = np.zeros((n, 2, 8), dtype=np.float32)
         for i, (cam, _fid, _ts, histo) in enumerate(rows):
             raw_hist[i, side_idx, cam] = histo
+            temp_arr[i, side_idx, cam] = 36.5
         return FrameBatch(
             cam_ids=cam_ids, frame_ids=frame_ids, side_ids=side_ids,
             raw_histograms=raw_hist, temperature_c=temp_arr,

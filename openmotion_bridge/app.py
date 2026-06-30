@@ -9,10 +9,10 @@ at the dashboard ingest route, not here.
 from __future__ import annotations
 
 import os
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .engine import ReplayEngine
 
@@ -35,7 +35,7 @@ class ReplayRequest(BaseModel):
 
 
 class IngestRow(BaseModel):
-    side: int                       # 0 = left, 1 = right (required)
+    side: Literal[0, 1]             # 0 = left, 1 = right (422 on any other value)
     cam_id: int = -1
     frame_id: int = -1
     timestamp_s: float = 0.0
@@ -49,7 +49,7 @@ class IngestRow(BaseModel):
 class IngestRequest(BaseModel):
     scan_id: str
     subject_id: str
-    rows: list[IngestRow]
+    rows: list[IngestRow] = Field(min_length=1)   # 422 on empty
     session_meta: Optional[dict] = None
     session_start: Optional[float] = None
 
@@ -77,6 +77,8 @@ def create_app(db_path: Optional[str] = None,
     @app.get("/scan/{session_id}")
     def scan(session_id: int, side: Optional[int] = None,
              cam_id: Optional[int] = None, limit: Optional[int] = None) -> dict:
+        if side is not None and side not in (0, 1):
+            raise HTTPException(status_code=422, detail="side must be 0 or 1")
         result = engine.get_scan(session_id, side=side, cam_id=cam_id, limit=limit)
         if result["session"] is None:
             raise HTTPException(status_code=404, detail=f"session {session_id} not found")
@@ -97,6 +99,9 @@ def create_app(db_path: Optional[str] = None,
             if not (req.raw_csv_left or req.raw_csv_right):
                 raise HTTPException(status_code=400,
                                     detail="csv mode needs raw_csv_left and/or raw_csv_right")
+            for p in (req.raw_csv_left, req.raw_csv_right):
+                if p and not os.path.isfile(p):
+                    raise HTTPException(status_code=400, detail=f"csv not found: {p}")
             return engine.run_csv(
                 scan_id=req.scan_id, subject_id=req.subject_id,
                 raw_csv_left=req.raw_csv_left, raw_csv_right=req.raw_csv_right,

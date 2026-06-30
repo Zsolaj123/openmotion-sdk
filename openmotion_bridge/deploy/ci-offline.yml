@@ -31,10 +31,12 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install (editable + dev extras)
-        run: python -m pip install -e ".[dev]"
+      - name: Install (editable + dev + bridge extras)
+        run: python -m pip install -e ".[dev,bridge]"   # bridge extra so the 6 bridge tests run, not skip
 
       - name: Hardware-free test suite
-        # The full hardware-free subset (~469 tests); device-gated tests
-        # (console/sensor/fpga/imu) self-skip without hardware.
-        run: pytest tests/ -m "not destructive and not slow" -q
+        # The full hardware-free subset (~471 tests + 6 bridge); device-gated
+        # tests (console/sensor/fpga/imu) self-skip/deselect without hardware.
+        # `python -m pytest` (not bare `pytest`) puts the repo root on sys.path
+        # for the cross-tests import in test_determinism.py.
+        run: python -m pytest tests/ -m "not destructive and not slow and not fpga and not imu" -q

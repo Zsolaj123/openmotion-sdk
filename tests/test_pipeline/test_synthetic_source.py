@@ -13,6 +13,7 @@ import math
 from dataclasses import dataclass
 
 import numpy as np
+import pytest
 
 from omotion.pipeline.factory import default_pipeline
 from omotion.pipeline.runner import ScanRunner
@@ -51,6 +52,7 @@ class _CollectingSink:
         self.final_intervals = 0
         self.bfi_values: list[float] = []
         self.bvi_values: list[float] = []
+        self.sides: set = set()
 
     def on_scan_start(self, meta) -> None:  # noqa: D401
         pass
@@ -62,6 +64,7 @@ class _CollectingSink:
         for f in getattr(payload, "frames", []):
             if not (0 <= int(getattr(f, "cam_id", -99)) < 8):
                 continue
+            self.sides.add(getattr(f, "side", None))
             bfi = getattr(f, "bfi", None)
             bvi = getattr(f, "bvi", None)
             if bfi is not None:
@@ -124,3 +127,16 @@ def test_synthetic_source_bilateral():
     sink = _run(_meta(right_camera_mask=0x01), n_frames=50)
     assert sink.final_intervals > 0
     assert sink.bfi_values
+    assert {"left", "right"} <= sink.sides, f"expected both sides, got {sink.sides}"
+
+
+def test_synthetic_source_rejects_no_active_side():
+    """No camera masks set → fail loud, not silently stream nothing."""
+    with pytest.raises(ValueError, match="no active side"):
+        SyntheticSource(metadata=_meta(left_camera_mask=0, right_camera_mask=0), n_frames=50)
+
+
+def test_synthetic_source_rejects_too_few_frames():
+    """n_frames too small to close an interval → ValueError, not a silent empty scan."""
+    with pytest.raises(ValueError, match="too small"):
+        SyntheticSource(metadata=_meta(), n_frames=5, discard_count=9)

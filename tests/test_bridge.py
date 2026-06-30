@@ -89,6 +89,52 @@ def test_ingest_persists_and_serves(client):
     assert all(row["bfi"] is not None for row in data)
 
 
+def test_ingest_rejects_bad_side_no_orphan(client):
+    """Bad side → 422 (not 500), and no orphan empty session is created."""
+    r = client.post("/ingest", json={
+        "scan_id": "a", "subject_id": "b",
+        "rows": [{"side": 2, "cam_id": 0, "timestamp_s": 0.1, "bfi": 1.0}]})
+    assert r.status_code == 422, r.text
+    assert client.get("/scans").json() == [], "rejected ingest must leave no orphan session"
+
+
+def test_ingest_rejects_empty_rows(client):
+    r = client.post("/ingest", json={"scan_id": "a", "subject_id": "b", "rows": []})
+    assert r.status_code == 422
+
+
+def test_replay_csv_missing_file_returns_400(client):
+    r = client.post("/replay", json={
+        "mode": "csv", "scan_id": "c", "subject_id": "s", "raw_csv_left": "/no/such/file.csv"})
+    assert r.status_code == 400, r.text
+    assert "not found" in r.json()["detail"]
+
+
+def test_scan_bad_side_returns_422(client):
+    client.post("/replay", json={"mode": "synthetic", "scan_id": "s", "subject_id": "x",
+                                 "n_frames": 160, "dark_interval": 40})
+    assert client.get("/scan/1?side=2").status_code == 422
+
+
+def test_scan_limit_zero_returns_no_rows(client):
+    rr = client.post("/replay", json={"mode": "synthetic", "scan_id": "s", "subject_id": "x",
+                                      "n_frames": 160, "dark_interval": 40})
+    sid = rr.json()["session_id"]
+    assert client.get(f"/scan/{sid}?limit=0").json()["data"] == []
+    assert len(client.get(f"/scan/{sid}?limit=2").json()["data"]) == 2
+
+
+def test_upload_missing_session_errors_before_post(tmp_path):
+    """upload of a nonexistent --session-id exits with a clear error, not a
+    silent phantom 'scan_subj' session on the receiver."""
+    from openmotion_bridge.engine import ReplayEngine
+    from openmotion_bridge import upload as up
+    db = str(tmp_path / "ws.db")
+    ReplayEngine(db).run_synthetic(scan_id="s", subject_id="x", n_frames=160, dark_interval=40)
+    with pytest.raises(SystemExit):
+        up.upload(db, "http://127.0.0.1:1", session_id=99999)  # errors before any network call
+
+
 def test_upload_roundtrip(tmp_path):
     """The workstation→Niflheim path: rows_from_session reads a replayed local
     DB, those rows POST to /ingest on a second bridge, and come back queryable."""
