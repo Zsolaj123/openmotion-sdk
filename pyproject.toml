@@ -32,12 +32,18 @@ keywords = ["stm32", "fpga", "camera", "usb", "serial", "openmotion"]
 
 [project.optional-dependencies]
 keyboard = ["keyboard>=0.13.5"]
+# openmotion-bridge: the standalone AGPL HTTP service (the sole omotion-importing
+# process). Optional so the core SDK keeps no web dependency.
+bridge = ["fastapi>=0.110", "uvicorn>=0.29", "pydantic>=2"]
 dev = [
   "pytest>=8.0",
   "pytest-html>=4.0",
   "pytest-timeout>=2.3",
   "pytest-benchmark>=4.0",
   "hidapi>=0.14",  # tests/ykush.py — YKUSH USB hub control for HIL tests
+  "fastapi>=0.110",  # openmotion_bridge tests
+  "uvicorn>=0.29",
+  "httpx>=0.27",     # fastapi TestClient (tests/test_bridge.py)
 ]
 
 [project.urls]
@@ -46,7 +52,7 @@ Issues     = "https://github.com/OpenwaterHealth/openmotion-sdk/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["omotion"]
+include = ["omotion", "openmotion_bridge"]
 namespaces = false
 
 [tool.setuptools]
