@@ -391,3 +391,130 @@ class LiveUsbSource(_BaseSource):
             raw_histograms=raw_hist, temperature_c=temps,
             timestamp_s=timestamp_s, pdc=None, tcm=None, tcl=None,
         )
+
+
+class SyntheticSource(_BaseSource):
+    """Hardware-free Source that synthesizes a realistic raw-histogram scan and
+    yields it as FrameBatch objects through the *identical* pipeline.
+
+    This closes the gap that ``demo_mode`` leaves. ``demo_mode`` /
+    ``OPENMOTION_DEMO=1`` mocks only the console, leaves both sensors
+    DISCONNECTED, and makes a ``start_scan`` iterate an EMPTY source — it
+    completes with no frames, no BFI/BVI, only a warning. ``SyntheticSource``
+    instead generates real synthetic histograms with a warmup → periodic-dark →
+    light-frame schedule, so DarkCorrectionStage closes intervals and the
+    pipeline emits corrected BFI/BVI on the ``"final"`` channel exactly as a
+    live scan would. That makes ``start_scan``-shaped acquisition logic and the
+    full stage chain exercisable in CI on any machine with no device.
+
+    The histogram synthesis mirrors
+    ``tests/test_pipeline/data/regenerate_goldens.py`` and the positional dark
+    schedule mirrors ``tests/fixtures/generate_fixtures.py`` so a synthetic scan
+    is structurally identical to a recorded one. Drive it with
+    ``default_pipeline`` using the SAME ``discard_count`` / ``dark_interval``
+    you pass here (classification is positional).
+
+    Active sides/cameras are taken from ``metadata``'s camera masks unless
+    ``cam_ids`` is given. Deterministic for a fixed ``seed``.
+    """
+
+    def __init__(self, *,
+                 metadata: ScanMetadata,
+                 n_frames: int = 50,
+                 cam_ids: Optional[list[int]] = None,
+                 discard_count: int = 9,
+                 dark_interval: int = 20,
+                 pedestal: float = 64.0,
+                 photons_per_frame: int = 10_000,
+                 batch_size_frames: int = 20,
+                 seed: int = 42,
+                 normalize_timestamps: bool = True):
+        super().__init__(metadata=metadata, normalize_timestamps=normalize_timestamps)
+        self._n_frames = int(n_frames)
+        self._discard_count = int(discard_count)
+        self._dark_interval = int(dark_interval)
+        self._pedestal = float(pedestal)
+        self._photons = int(photons_per_frame)
+        self._batch_size = max(1, int(batch_size_frames))
+        self._seed = int(seed)
+        self._cam_override = cam_ids
+        # Side index + mask, taken from the scan masks (left=0, right=1).
+        self._sides: list[tuple[str, int, int]] = []
+        if metadata.left_camera_mask:
+            self._sides.append(("left", 0, metadata.left_camera_mask))
+        if metadata.right_camera_mask:
+            self._sides.append(("right", 1, metadata.right_camera_mask))
+
+    def _cams_for(self, mask: int) -> list[int]:
+        if self._cam_override is not None:
+            return list(self._cam_override)
+        return [c for c in range(8) if mask & (1 << c)]
+
+    def _is_dark(self, abs_frame: int) -> bool:
+        # Mirror of FrameClassificationStage / generate_fixtures._is_dark_frame:
+        # the first post-warmup frame is dark, then every dark_interval-th.
+        if abs_frame == self._discard_count + 1:
+            return True
+        return (abs_frame > self._discard_count + 1
+                and (abs_frame - 1) % self._dark_interval == 0)
+
+    def _make_histogram(self, u1: float, std: float,
+                        rng: np.random.Generator) -> np.ndarray:
+        """Gaussian-shaped 1024-bin histogram with the given mean/std (matches
+        regenerate_goldens._make_histogram)."""
+        bins = np.arange(1024, dtype=np.float64)
+        weights = np.exp(-0.5 * ((bins - u1) / max(std, 1.0)) ** 2)
+        weights = np.maximum(weights, 0.0)
+        total = weights.sum()
+        if total <= 0:
+            weights[min(max(int(u1), 0), 1023)] = 1.0
+            total = 1.0
+        probs = weights / total
+        return rng.multinomial(self._photons, probs).astype(np.uint32)
+
+    def __iter__(self) -> Iterator[FrameBatch]:
+        rng = np.random.default_rng(self._seed)
+        for side_name, side_idx, mask in self._sides:
+            cams = self._cams_for(mask)
+            rows: list[tuple] = []  # (cam_id, raw_frame_id, ts, histogram)
+            for frame_num in range(1, self._n_frames + 1):
+                ts = (frame_num - 1) / 40.0  # 40 Hz capture cadence
+                is_warmup = frame_num <= self._discard_count
+                is_terminal = frame_num == self._n_frames
+                if self._is_dark(frame_num) or is_terminal:
+                    # Dark / terminal-dark frame: signal near the pedestal.
+                    u1 = self._pedestal + rng.uniform(2.0, 5.0)
+                    std = 3.0 + rng.uniform(0.0, 1.0)
+                elif is_warmup:
+                    u1 = self._pedestal + rng.uniform(50.0, 80.0)
+                    std = 10.0 + rng.uniform(0.0, 5.0)
+                else:
+                    # Light frame: bright, the real measurement.
+                    u1 = self._pedestal + 150.0 + rng.uniform(-10.0, 10.0)
+                    std = 15.0 + rng.uniform(0.0, 3.0)
+                raw_fid = frame_num % 256  # u8 rolling counter, like firmware
+                for cam in cams:
+                    rows.append((cam, raw_fid, ts,
+                                 self._make_histogram(u1, std, rng)))
+                    if len(rows) >= self._batch_size:
+                        yield self._rows_to_batch(side_idx, rows)
+                        rows = []
+            if rows:
+                yield self._rows_to_batch(side_idx, rows)
+
+    def _rows_to_batch(self, side_idx: int, rows: list) -> FrameBatch:
+        n = len(rows)
+        cam_ids     = np.array([r[0] for r in rows], dtype=np.int8)
+        frame_ids   = np.array([r[1] for r in rows], dtype=np.uint8)
+        timestamp_s = np.array([r[2] for r in rows], dtype=np.float64)
+        timestamp_s = self._apply_timestamp_normalization(timestamp_s)
+        side_ids    = np.full(n, side_idx, dtype=np.int8)
+        raw_hist    = np.zeros((n, 2, 8, 1024), dtype=np.uint32)
+        temp_arr    = np.full((n, 2, 8), 36.5, dtype=np.float32)
+        for i, (cam, _fid, _ts, histo) in enumerate(rows):
+            raw_hist[i, side_idx, cam] = histo
+        return FrameBatch(
+            cam_ids=cam_ids, frame_ids=frame_ids, side_ids=side_ids,
+            raw_histograms=raw_hist, temperature_c=temp_arr,
+            timestamp_s=timestamp_s, pdc=None, tcm=None, tcl=None,
+        )
