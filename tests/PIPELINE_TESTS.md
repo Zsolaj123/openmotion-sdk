@@ -1,5 +1,20 @@
 # Science Pipeline CSV Tests
 
+> ⚠️ **OUTDATED — kept for historical reference.** The science pipeline moved from the
+> old `SciencePipeline` in `omotion/MotionProcessing.py` to the stage-based pipeline
+> under `omotion/pipeline/`. The `test_pipeline_csv.py` / `test_pipeline_perf.py`
+> modules described below **no longer exist**. The current hardware-free suite lives
+> under **`tests/test_pipeline/`** (32 files). Run it with:
+>
+> ```bash
+> pytest tests/test_pipeline/                      # the canonical entry point
+> python scripts/run_pipeline_csv_tests.py         # thin wrapper around the above
+> pytest tests/ -m "not destructive and not slow"  # full hardware-free CI subset
+> ```
+>
+> Pipeline reference: `docs/SciencePipeline.md`. The sections below describe the
+> retired suite and are no longer accurate.
+
 Hardware-free tests for the science data pipeline (`SciencePipeline` in `omotion/MotionProcessing.py`). All tests are driven by pre-generated histogram CSV fixtures — no physical device is required.
 
 ## Running the tests
