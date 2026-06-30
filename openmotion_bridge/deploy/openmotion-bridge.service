@@ -1,0 +1,32 @@
+# openmotion-bridge — Niflheim receiver/replay/serve service.
+#
+# Install (run on Niflheim):
+#   sudo cp openmotion_bridge/deploy/openmotion-bridge.service /etc/systemd/system/
+#   sudo mkdir -p /tank/openmotion/scans && sudo chown zsine:zsine /tank/openmotion/scans
+#   sudo systemctl daemon-reload && sudo systemctl enable --now openmotion-bridge
+#   systemctl status openmotion-bridge   # then: curl 127.0.0.1:5193/health
+#
+# ADJUST the two paths below if the openmotion-sdk fork lives somewhere other
+# than the current analysis clone. Binds 127.0.0.1 — reach it from a workstation
+# via SSH LocalForward 5193 (preferred) or, only if you set HOST=0.0.0.0,
+# Tailscale http://niflheim:5193 (no auth — see the bridge README).
+
+[Unit]
+Description=openmotion-bridge (Open-Motion replay / ingest / serve)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zsine
+WorkingDirectory=/tank/repos/.research-clones/openmotion-sdk
+Environment=OPENMOTION_BRIDGE_DB=/tank/openmotion/scans/scans.db
+Environment=OPENMOTION_BRIDGE_HOST=127.0.0.1
+Environment=OPENMOTION_BRIDGE_PORT=5193
+ExecStart=/tank/repos/.research-clones/openmotion-sdk/.venv/bin/python -m openmotion_bridge
+Restart=on-failure
+RestartSec=3
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target
