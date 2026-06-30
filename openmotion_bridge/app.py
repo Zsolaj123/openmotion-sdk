@@ -34,6 +34,26 @@ class ReplayRequest(BaseModel):
     raw_csv_right: Optional[str] = None
 
 
+class IngestRow(BaseModel):
+    side: int                       # 0 = left, 1 = right (required)
+    cam_id: int = -1
+    frame_id: int = -1
+    timestamp_s: float = 0.0
+    bfi: Optional[float] = None
+    bvi: Optional[float] = None
+    contrast: Optional[float] = None
+    mean: Optional[float] = None
+    quality: str = "ok"
+
+
+class IngestRequest(BaseModel):
+    scan_id: str
+    subject_id: str
+    rows: list[IngestRow]
+    session_meta: Optional[dict] = None
+    session_start: Optional[float] = None
+
+
 def create_app(db_path: Optional[str] = None,
                engine: Optional[ReplayEngine] = None) -> FastAPI:
     db_path = db_path or os.environ.get("OPENMOTION_BRIDGE_DB", "openmotion_scans.db")
@@ -86,6 +106,18 @@ def create_app(db_path: Optional[str] = None,
                 reduced_mode=req.reduced_mode,
             )
         raise HTTPException(status_code=400, detail=f"unknown mode {req.mode!r}")
+
+    @app.post("/ingest")
+    def ingest(req: IngestRequest) -> dict:
+        # Receive corrected rows pushed from another bridge (the bench
+        # workstation → this Niflheim instance). The cross-Tailscale hop should
+        # carry an auth token at the dashboard proxy in front of this; the
+        # bridge itself stays loopback + unauthenticated by design.
+        return engine.ingest_rows(
+            scan_id=req.scan_id, subject_id=req.subject_id,
+            rows=[r.model_dump() for r in req.rows],
+            session_meta=req.session_meta, session_start=req.session_start,
+        )
 
     @app.get("/live/{subject_id}")
     def live(subject_id: str) -> dict:

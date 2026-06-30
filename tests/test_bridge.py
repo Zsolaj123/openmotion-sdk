@@ -71,3 +71,45 @@ def test_bilateral_replay(client):
     sid = r.json()["session_id"]
     sides = {row["side"] for row in client.get(f"/scan/{sid}").json()["data"]}
     assert sides == {0, 1}, f"expected both sides, got {sides}"
+
+
+def test_ingest_persists_and_serves(client):
+    """POST /ingest stores pushed corrected rows; they come back queryable."""
+    body = {"scan_id": "ing", "subject_id": "subjC", "rows": [
+        {"side": 0, "cam_id": 0, "frame_id": 10, "timestamp_s": 0.25, "bfi": 4.1, "bvi": 6.0},
+        {"side": 1, "cam_id": 2, "frame_id": 11, "timestamp_s": 0.275, "bfi": 3.9, "bvi": 5.8},
+    ]}
+    r = client.post("/ingest", json=body)
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["ingested_rows"] == 2
+    data = client.get(f"/scan/{out['session_id']}").json()["data"]
+    assert len(data) == 2
+    assert {row["side"] for row in data} == {0, 1}
+    assert all(row["bfi"] is not None for row in data)
+
+
+def test_upload_roundtrip(tmp_path):
+    """The workstation→Niflheim path: rows_from_session reads a replayed local
+    DB, those rows POST to /ingest on a second bridge, and come back queryable."""
+    from openmotion_bridge.engine import ReplayEngine
+    from openmotion_bridge import upload as up
+
+    # 1. "workstation" bridge: replay a synthetic scan into a local DB.
+    src_db = str(tmp_path / "ws.db")
+    summary = ReplayEngine(src_db).run_synthetic(
+        scan_id="s", subject_id="subjD", n_frames=160, dark_interval=40)
+    assert summary["corrected_rows"] > 0
+    session, rows = up.rows_from_session(src_db, summary["session_id"])
+    assert rows and {r["side"] for r in rows} <= {0, 1}
+
+    # 2. "Niflheim" bridge: ingest those rows over HTTP, then serve them back.
+    dst = TestClient(create_app(db_path=str(tmp_path / "niflheim.db")))
+    r = dst.post("/ingest", json={
+        "scan_id": "s", "subject_id": "subjD", "rows": rows,
+        "session_meta": session.get("session_meta"),
+    })
+    assert r.status_code == 200, r.text
+    assert r.json()["ingested_rows"] == len(rows)
+    served = dst.get(f"/scan/{r.json()['session_id']}").json()["data"]
+    assert len(served) == len(rows)

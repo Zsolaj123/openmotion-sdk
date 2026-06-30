@@ -10,6 +10,7 @@ LiveUsbSource).
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -163,5 +164,46 @@ class ReplayEngine:
                 if limit is not None and len(rows) >= limit:
                     break
             return {"session": session, "data": rows}
+        finally:
+            db.close()
+
+    # -- ingest (a remote bridge → this instance) -------------------------
+
+    def ingest_rows(self, *, scan_id: str, subject_id: str, rows: list[dict],
+                    session_meta: Optional[dict] = None,
+                    session_start: Optional[float] = None) -> dict:
+        """Persist corrected rows pushed from another bridge — e.g. the bench
+        workstation's bridge POSTing a finished scan to this Niflheim instance.
+
+        Each row needs at least ``side`` (0/1); cam_id/frame_id/timestamp_s and
+        the bfi/bvi/contrast/mean/quality metrics are optional. Creates one
+        session (label ``{scan_id}_{subject_id}``) and returns its id + count.
+        """
+        db = ScanDatabase(db_path=self.db_path)
+        try:
+            label = f"{scan_id}_{subject_id}"
+            meta = session_meta or {
+                "scan_id": scan_id, "subject_id": subject_id,
+                "data_semantics": "final",
+            }
+            start = float(session_start) if session_start is not None else time.time()
+            session_id = db.create_session(
+                session_label=label, session_start=start,
+                session_notes=None, session_meta=meta,
+            )
+            payload = [{
+                "session_id": session_id,
+                "cam_id": int(r.get("cam_id", -1)),
+                "side": int(r["side"]),
+                "frame_id": int(r.get("frame_id", -1)),
+                "timestamp_s": float(r.get("timestamp_s", 0.0)),
+                "bfi": r.get("bfi"), "bvi": r.get("bvi"),
+                "contrast": r.get("contrast"), "mean": r.get("mean"),
+                "quality": str(r.get("quality", "ok") or "ok"),
+            } for r in rows]
+            n = db.insert_session_data_rows(payload) if payload else 0
+            db.close_session(session_id, start)
+            return {"session_id": session_id, "session_label": label,
+                    "ingested_rows": n}
         finally:
             db.close()
